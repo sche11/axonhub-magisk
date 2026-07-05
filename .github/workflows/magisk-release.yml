@@ -128,10 +128,9 @@ jobs:
           VERSION="${{ steps.decide.outputs.version }}"
 
           echo "获取上游 $UPSTREAM_REPO release $VERSION 的 changelog..."
-          # 同时获取 tag name 和 body
-          UPSTREAM_INFO=$(gh release view "$VERSION" --repo "$UPSTREAM_REPO" --json tagName,body -q '.tagName + "\n---BODY-SEPARATOR---\n" + .body')
-          UPSTREAM_TAG=$(echo "$UPSTREAM_INFO" | head -n1)
-          CHANGELOG=$(echo "$UPSTREAM_INFO" | sed -n 's/^---BODY-SEPARATOR---$//,$p' | tail -n +2)
+          # 分两次调用获取 tagName 和 body，避免多行文本解析问题
+          UPSTREAM_TAG=$(gh release view "$VERSION" --repo "$UPSTREAM_REPO" --json tagName -q '.tagName')
+          CHANGELOG=$(gh release view "$VERSION" --repo "$UPSTREAM_REPO" --json body -q '.body // ""')
 
           if [[ -z "$CHANGELOG" ]]; then
             CHANGELOG="AxonHub $VERSION - 复用上游更新说明"
@@ -322,6 +321,7 @@ jobs:
     steps:
       - name: 汇总状态
         env:
+          CHECK_RESULT: ${{ needs.check-upstream.result }}
           SHOULD_BUILD: ${{ needs.check-upstream.outputs.should_build }}
           BUILD_RESULT: ${{ needs.build-magisk.result }}
           PUBLISH_RESULT: ${{ needs.publish-release.result }}
@@ -331,16 +331,32 @@ jobs:
           echo " Magisk 模块发布流程"
           echo "=========================================="
           echo "版本: ${VERSION:-N/A}"
+          echo "上游检查: ${CHECK_RESULT:-unknown}"
           echo "需要构建: $SHOULD_BUILD"
           echo "构建结果: ${BUILD_RESULT:-skipped}"
           echo "发布结果: ${PUBLISH_RESULT:-skipped}"
           echo "=========================================="
 
-          if [[ "$SHOULD_BUILD" == "true" ]]; then
-            if [[ "$BUILD_RESULT" != "success" || "$PUBLISH_RESULT" != "success" ]]; then
-              echo "::error::构建或发布失败"
-              exit 1
-            fi
+          # 上游检查失败是最先失败的环节，优先报告
+          if [[ "$CHECK_RESULT" != "success" ]]; then
+            echo "::error::上游检查阶段失败，后续构建/发布已跳过"
+            exit 1
           fi
 
-          echo "流程完成"
+          # 不需要构建（已存在且非强制）—— 正常退出
+          if [[ "$SHOULD_BUILD" != "true" ]]; then
+            echo "流程完成（无需构建，release 已存在）"
+            exit 0
+          fi
+
+          # 需要构建但构建/发布失败
+          if [[ "$BUILD_RESULT" != "success" ]]; then
+            echo "::error::构建失败 (result=$BUILD_RESULT)"
+            exit 1
+          fi
+          if [[ "$PUBLISH_RESULT" != "success" ]]; then
+            echo "::error::发布失败 (result=$PUBLISH_RESULT)"
+            exit 1
+          fi
+
+          echo "流程完成（构建并发布成功）"
