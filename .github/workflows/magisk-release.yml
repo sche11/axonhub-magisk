@@ -3,7 +3,7 @@ name: Magisk Module Release
 # 监听上游 axonhub release，自动构建 Magisk 模块并发布到本仓库
 #
 # 触发方式：
-#   1. 定时轮询（每小时）：检查上游最新 release，若未构建过则触发
+#   1. 定时轮询（每天）：检查上游最新 release，若未构建过则触发
 #   2. 手动触发：在 Actions 页面手动运行，可指定版本号
 #
 # 输出：
@@ -13,9 +13,9 @@ name: Magisk Module Release
 
 on:
   schedule:
-    # 每小时整点轮询（UTC 时间）
+    # 每天 UTC 08:00 轮询一次
     # 实际触发可能延迟 5-15 分钟（GitHub Actions 调度特性）
-    - cron: '0 * * * *'
+    - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
       version:
@@ -300,16 +300,18 @@ jobs:
           echo "更新后的 update.json:"
           cat update.json
 
+          # 仅当内容真正变化时才提交，避免空提交
+          git add update.json
+          if git diff --cached --quiet; then
+            echo "update.json 无变更，跳过提交"
+            exit 0
+          fi
+
           # 配置 git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add update.json
-          git commit -m "chore(magisk): update update.json to $VERSION" || {
-            echo "::warning::update.json 无变更（可能已是最新）"
-            exit 0
-          }
-
+          git commit -m "chore(magisk): update update.json to $VERSION"
           git push origin HEAD:main
           echo "update.json 已推送到 main"
 
