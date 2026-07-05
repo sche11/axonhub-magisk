@@ -1,0 +1,346 @@
+name: Magisk Module Release
+
+# 监听上游 axonhub release，自动构建 Magisk 模块并发布到本仓库
+#
+# 触发方式：
+#   1. 定时轮询（每小时）：检查上游最新 release，若未构建过则触发
+#   2. 手动触发：在 Actions 页面手动运行，可指定版本号
+#
+# 输出：
+#   - Release tag: magisk-vX.Y.Z（含预发布版本如 magisk-v1.0.0-beta4）
+#   - Release 资产: axonhub-vX.Y.Z-magisk.zip
+#   - 自动更新 update.json 并提交到 main 分支
+
+on:
+  schedule:
+    # 每小时整点轮询（UTC 时间）
+    # 实际触发可能延迟 5-15 分钟（GitHub Actions 调度特性）
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '上游版本号（如 v0.9.38 或 v1.0.0-beta4），留空则自动检测最新'
+        required: false
+        default: ''
+      force:
+        description: '强制重新构建（即使 release 已存在）'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write    # 创建 release 和 commit update.json
+  actions: read      # 读取 workflow 信息
+
+env:
+  UPSTREAM_REPO: looplj/axonhub
+  GO_VERSION: '1.24'
+
+jobs:
+  check-upstream:
+    name: 检查上游 release
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      version: ${{ steps.decide.outputs.version }}
+      version_code: ${{ steps.decide.outputs.version_code }}
+      changelog: ${{ steps.fetch-upstream.outputs.changelog }}
+      upstream_tag: ${{ steps.fetch-upstream.outputs.upstream_tag }}
+    steps:
+      - name: Checkout 本仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检测/校验版本号
+        id: decide
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_FORCE: ${{ github.event.inputs.force }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # 确定上游最新 release tag
+          if [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"
+            # 标准化：确保以 v 开头
+            [[ "$VERSION" != v* ]] && VERSION="v$VERSION"
+          else
+            echo "查询上游 $UPSTREAM_REPO 最新 release..."
+            VERSION=$(gh release view --repo "$UPSTREAM_REPO" --json tagName -q '.tagName')
+            if [[ -z "$VERSION" ]]; then
+              echo "::warning::上游无 release，退出"
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # 去掉可能的 magisk- 前缀
+          VERSION="${VERSION#magisk-}"
+
+          # 计算 versionCode（支持预发布版本）
+          # X.Y.Z         → X*10000 + Y*100 + Z           (v1.0.0 → 10000)
+          # X.Y.Z-betaN   → X*10000 + Y*100 + Z - N       (v1.0.0-beta4 → 9996)
+          if [[ "$VERSION" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-(beta|rc|alpha)([0-9]+))?$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+            PRE_TYPE="${BASH_REMATCH[5]:-}"
+            PRE_NUM="${BASH_REMATCH[6]:-0}"
+            BASE_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+            if [[ -n "$PRE_TYPE" ]]; then
+              VERSION_CODE=$((BASE_CODE - PRE_NUM))
+            else
+              VERSION_CODE="$BASE_CODE"
+            fi
+          else
+            echo "ERROR: 无法解析版本号 '$VERSION'" >&2
+            exit 1
+          fi
+
+          echo "上游版本: $VERSION (versionCode=$VERSION_CODE)"
+
+          MAGISK_TAG="magisk-$VERSION"
+          echo "Magisk tag: $MAGISK_TAG"
+
+          # 判断是否已构建
+          SHOULD_BUILD="true"
+          if [[ "$INPUT_FORCE" != "true" ]]; then
+            if gh release view "$MAGISK_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $MAGISK_TAG 已存在，跳过构建"
+              SHOULD_BUILD="false"
+            fi
+          else
+            echo "强制重建模式"
+          fi
+
+          echo "should_build=$SHOULD_BUILD" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: 获取上游 release changelog
+        id: fetch-upstream
+        if: steps.decide.outputs.should_build == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.decide.outputs.version }}"
+
+          echo "获取上游 $UPSTREAM_REPO release $VERSION 的 changelog..."
+          # 同时获取 tag name 和 body
+          UPSTREAM_INFO=$(gh release view "$VERSION" --repo "$UPSTREAM_REPO" --json tagName,body -q '.tagName + "\n---BODY-SEPARATOR---\n" + .body')
+          UPSTREAM_TAG=$(echo "$UPSTREAM_INFO" | head -n1)
+          CHANGELOG=$(echo "$UPSTREAM_INFO" | sed -n 's/^---BODY-SEPARATOR---$//,$p' | tail -n +2)
+
+          if [[ -z "$CHANGELOG" ]]; then
+            CHANGELOG="AxonHub $VERSION - 复用上游更新说明"
+          fi
+
+          # 写入文件避免 GitHub Actions output 截断问题
+          CHANGELOG_FILE="$RUNNER_TEMP/changelog.md"
+          echo "$CHANGELOG" > "$CHANGELOG_FILE"
+
+          echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          echo "changelog 文件: $CHANGELOG_FILE (字节: $(wc -c < "$CHANGELOG_FILE"))"
+          echo "上游 tag: $UPSTREAM_TAG"
+
+  build-magisk:
+    name: 构建 Magisk 模块
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 本仓库（获取模块文件）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 设置 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: 设置 Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: 构建模块
+        id: build
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          VERSION: ${{ needs.check-upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          chmod +x ./build-module.sh
+          ./build-module.sh "$VERSION" "$(pwd)/artifacts"
+
+          ZIP_PATH=$(ls artifacts/*.zip | head -n1)
+          echo "zip-path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "zip-name=$(basename "$ZIP_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: magisk-module
+          path: artifacts/*.zip
+          retention-days: 7
+
+  publish-release:
+    name: 发布 Release 并更新 update.json
+    needs: [check-upstream, build-magisk]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 本仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: magisk-module
+          path: artifacts
+
+      - name: 准备 changelog
+        id: prep-changelog
+        env:
+          CHANGELOG: ${{ needs.check-upstream.outputs.changelog }}
+        run: |
+          CHANGELOG_FILE="$RUNNER_TEMP/release-changelog.md"
+          {
+            echo "# AxonHub Magisk Module ${{ needs.check-upstream.outputs.version }}"
+            echo ""
+            echo "Magisk 模块版本，基于上游 [${{ env.UPSTREAM_REPO }}@${{ needs.check-upstream.outputs.upstream_tag }}](https://github.com/${{ env.UPSTREAM_REPO }}/releases/tag/${{ needs.check-upstream.outputs.upstream_tag }})"
+            echo ""
+            echo "## 上游更新说明"
+            echo ""
+            echo "$CHANGELOG"
+            echo ""
+            echo "---"
+            echo ""
+            echo "## 安装方式"
+            echo ""
+            echo "1. 下载 \`axonhub-${{ needs.check-upstream.outputs.version }}-magisk.zip\`"
+            echo "2. 在 Magisk Manager 中：模块 → 从存储安装 → 选择 zip"
+            echo "3. 重启设备"
+            echo "4. 访问 http://127.0.0.1:8090"
+            echo ""
+            echo "## 关键信息"
+            echo ""
+            echo "- **访问地址**: http://127.0.0.1:8090"
+            echo "- **数据目录**: /data/adb/axonhub"
+            echo "- **配置文件**: /data/adb/axonhub/config.yml"
+            echo "- **日志文件**: /data/adb/axonhub/logs/axonhub.log"
+            echo "- **Action 按钮**: 重启 axonhub 服务"
+            echo "- **WebUI 面板**: 自动重定向到管理界面"
+            echo "- **versionCode**: ${{ needs.check-upstream.outputs.version_code }}"
+          } > "$CHANGELOG_FILE"
+
+          echo "path=$CHANGELOG_FILE" >> "$GITHUB_OUTPUT"
+          echo "Changelog 字节数: $(wc -c < "$CHANGELOG_FILE")"
+
+      - name: 创建 Release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.check-upstream.outputs.version }}"
+          MAGISK_TAG="magisk-$VERSION"
+          ZIP_FILE=$(ls artifacts/*.zip | head -n1)
+          ZIP_NAME=$(basename "$ZIP_FILE")
+          CHANGELOG_FILE="${{ steps.prep-changelog.outputs.path }}"
+
+          echo "创建 Release: $MAGISK_TAG"
+          echo "上传资产: $ZIP_NAME"
+
+          # 如果已存在则先删除（force 重建场景）
+          if gh release view "$MAGISK_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $MAGISK_TAG 已存在，先删除"
+            gh release delete "$MAGISK_TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+
+          gh release create "$MAGISK_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AxonHub Magisk $VERSION" \
+            --notes-file "$CHANGELOG_FILE" \
+            "$ZIP_FILE"
+
+          echo "release-tag=$MAGISK_TAG" >> "$GITHUB_OUTPUT"
+          echo "zip-url=https://github.com/$GITHUB_REPOSITORY/releases/download/$MAGISK_TAG/$ZIP_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: 更新 update.json
+        env:
+          VERSION: ${{ needs.check-upstream.outputs.version }}
+          VERSION_CODE: ${{ needs.check-upstream.outputs.version_code }}
+          ZIP_URL: https://github.com/${{ github.repository }}/releases/download/magisk-${{ needs.check-upstream.outputs.version }}/axonhub-${{ needs.check-upstream.outputs.version }}-magisk.zip
+          CHANGELOG_URL: https://github.com/${{ github.repository }}/releases/tag/magisk-${{ needs.check-upstream.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cat > update.json <<EOF
+          {
+            "version": "$VERSION",
+            "versionCode": $VERSION_CODE,
+            "zipUrl": "$ZIP_URL",
+            "changelog": "$CHANGELOG_URL"
+          }
+          EOF
+
+          echo "更新后的 update.json:"
+          cat update.json
+
+          # 配置 git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add update.json
+          git commit -m "chore(magisk): update update.json to $VERSION" || {
+            echo "::warning::update.json 无变更（可能已是最新）"
+            exit 0
+          }
+
+          git push origin HEAD:main
+          echo "update.json 已推送到 main"
+
+  notify:
+    name: 通知结果
+    needs: [check-upstream, build-magisk, publish-release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总状态
+        env:
+          SHOULD_BUILD: ${{ needs.check-upstream.outputs.should_build }}
+          BUILD_RESULT: ${{ needs.build-magisk.result }}
+          PUBLISH_RESULT: ${{ needs.publish-release.result }}
+          VERSION: ${{ needs.check-upstream.outputs.version }}
+        run: |
+          echo "=========================================="
+          echo " Magisk 模块发布流程"
+          echo "=========================================="
+          echo "版本: ${VERSION:-N/A}"
+          echo "需要构建: $SHOULD_BUILD"
+          echo "构建结果: ${BUILD_RESULT:-skipped}"
+          echo "发布结果: ${PUBLISH_RESULT:-skipped}"
+          echo "=========================================="
+
+          if [[ "$SHOULD_BUILD" == "true" ]]; then
+            if [[ "$BUILD_RESULT" != "success" || "$PUBLISH_RESULT" != "success" ]]; then
+              echo "::error::构建或发布失败"
+              exit 1
+            fi
+          fi
+
+          echo "流程完成"

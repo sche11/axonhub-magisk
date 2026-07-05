@@ -1,0 +1,21 @@
+# 构建产物
+artifacts/
+*.zip
+!config/*.zip
+
+# 临时文件
+*.tmp
+*.bak
+*~
+
+# 二进制
+bin/
+axonhub
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

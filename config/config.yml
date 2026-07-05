@@ -1,0 +1,49 @@
+# AxonHub Magisk 模块默认配置
+# 部署位置：/data/adb/axonhub/config.yml（可写数据目录）
+# 修改后点击 Magisk 模块的 Action 按钮重启服务生效
+
+server:
+  host: "127.0.0.1"
+  port: 8090
+  name: "AxonHub"
+  debug: false
+  cors:
+    enabled: true
+    allowed_origins:
+      - "http://127.0.0.1:8090"
+      - "http://localhost:8090"
+      - "https://api.magisk.org"
+    allowed_methods: [GET, POST, DELETE, PATCH, PUT, OPTIONS, HEAD]
+    allowed_headers: [Content-Type, Authorization, X-API-Key, X-Goog-Api-Key, X-Project-ID, AH-Thread-Id, AH-Trace-Id]
+    allow_credentials: true
+    max_age: 1m
+  api:
+    auth:
+      allow_no_auth: true
+      key_prefix: "ah"
+db:
+  dialect: "sqlite3"
+  dsn: "file:axonhub.db?cache=shared&_fk=1&_pragma=journal_mode(WAL)"
+  max_open_conns: 20
+  max_idle_conns: 10
+cache:
+  mode: "memory"
+  memory:
+    expiration: "5s"
+    cleanup_interval: "10m"
+log:
+  name: "axonhub"
+  level: "info"
+  encoding: "console"
+  output: "file"
+  file:
+    path: "logs/axonhub.log"
+    max_size: 50
+    max_age: 7
+    max_backups: 3
+    local_time: true
+metrics:
+  enabled: false
+gc:
+  cron: "0 2 * * *"
+  vacuum_enabled: false

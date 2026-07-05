@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AxonHub</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html, body {
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            padding: 24px;
+            text-align: center;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            font-weight: 700;
+            color: white;
+            box-shadow: 0 10px 30px rgba(59, 130, 246, 0.3);
+        }
+
+        .title {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #f1f5f9;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #94a3b8;
+            margin-bottom: 32px;
+        }
+
+        .status-card {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            width: 100%;
+            max-width: 320px;
+            backdrop-filter: blur(10px);
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            padding: 6px 0;
+        }
+
+        .status-label {
+            color: #94a3b8;
+        }
+
+        .status-value {
+            color: #e2e8f0;
+            font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        .status-dot.online {
+            background: #10b981;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+        }
+
+        .status-dot.offline {
+            background: #ef4444;
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+        }
+
+        .status-dot.checking {
+            background: #f59e0b;
+            animation: pulse 1.2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 28px;
+            font-size: 15px;
+            font-weight: 500;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            min-width: 160px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-primary:active {
+            transform: scale(0.97);
+            box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(148, 163, 184, 0.1);
+            color: #e2e8f0;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            margin-top: 12px;
+        }
+
+        .btn-secondary:active {
+            background: rgba(148, 163, 184, 0.2);
+        }
+
+        .footer {
+            position: absolute;
+            bottom: 16px;
+            left: 0;
+            right: 0;
+            font-size: 11px;
+            color: #64748b;
+            text-align: center;
+        }
+
+        .auto-redirect {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 16px;
+        }
+
+        .redirect-countdown {
+            color: #3b82f6;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">A</div>
+        <h1 class="title">AxonHub</h1>
+        <p class="subtitle">LLM Gateway · Magisk Module</p>
+
+        <div class="status-card">
+            <div class="status-row">
+                <span class="status-label">服务状态</span>
+                <span class="status-value">
+                    <span id="statusDot" class="status-dot checking"></span>
+                    <span id="statusText">检测中</span>
+                </span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">访问地址</span>
+                <span class="status-value">127.0.0.1:8090</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">数据目录</span>
+                <span class="status-value">/data/adb/axonhub</span>
+            </div>
+        </div>
+
+        <button id="openBtn" class="btn btn-primary">打开管理面板</button>
+        <button id="retryBtn" class="btn btn-secondary" style="display:none;">重新检测</button>
+
+        <p class="auto-redirect">
+            <span id="redirectHint">将在 <span class="redirect-countdown" id="countdown">3</span> 秒后自动打开</span>
+        </p>
+
+        <div class="footer">AxonHub Magisk Module · powered by Magisk</div>
+    </div>
+
+    <script>
+        (function() {
+            'use strict';
+
+            var PORT = 8090;
+            var BASE_URL = 'http://127.0.0.1:' + PORT;
+            var countdown = 3;
+            var autoRedirectTimer = null;
+            var statusCheckTimer = null;
+
+            var statusDot = document.getElementById('statusDot');
+            var statusText = document.getElementById('statusText');
+            var openBtn = document.getElementById('openBtn');
+            var retryBtn = document.getElementById('retryBtn');
+            var countdownEl = document.getElementById('countdown');
+            var redirectHint = document.getElementById('redirectHint');
+
+            function setStatus(state, text) {
+                statusDot.className = 'status-dot ' + state;
+                statusText.textContent = text;
+            }
+
+            function checkService() {
+                setStatus('checking', '检测中');
+
+                fetch(BASE_URL + '/health', { method: 'GET', cache: 'no-store' })
+                    .then(function(resp) {
+                        if (resp.ok || resp.status === 401 || resp.status === 404) {
+                            setStatus('online', '运行中');
+                            startAutoRedirect();
+                        } else {
+                            setStatus('offline', '异常');
+                            showRetry();
+                        }
+                    })
+                    .catch(function() {
+                        setStatus('offline', '未运行');
+                        showRetry();
+                    });
+            }
+
+            function startAutoRedirect() {
+                if (autoRedirectTimer) return;
+                redirectHint.style.display = '';
+                countdownEl.textContent = countdown;
+                autoRedirectTimer = setInterval(function() {
+                    countdown--;
+                    countdownEl.textContent = countdown;
+                    if (countdown <= 0) {
+                        clearInterval(autoRedirectTimer);
+                        autoRedirectTimer = null;
+                        openPanel();
+                    }
+                }, 1000);
+            }
+
+            function showRetry() {
+                redirectHint.style.display = 'none';
+                if (autoRedirectTimer) {
+                    clearInterval(autoRedirectTimer);
+                    autoRedirectTimer = null;
+                }
+                retryBtn.style.display = '';
+            }
+
+            function openPanel() {
+                window.location.href = BASE_URL;
+            }
+
+            openBtn.addEventListener('click', function() {
+                openPanel();
+            });
+
+            retryBtn.addEventListener('click', function() {
+                retryBtn.style.display = 'none';
+                countdown = 3;
+                checkService();
+            });
+
+            checkService();
+        })();
+    </script>
+</body>
+</html>

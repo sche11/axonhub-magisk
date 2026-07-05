@@ -1,0 +1,7 @@
+id=axonhub
+name=AxonHub
+version=v0.9.38
+versionCode=938
+author=sche11
+description=AxonHub LLM Gateway - 在 Android 设备上运行完整的 axonhub 服务（含 Web 管理面板）。开机自启，通过 http://127.0.0.1:8090 访问。Action 按钮重启服务，WebUI 面板直达前端。
+updateJson=https://raw.githubusercontent.com/sche11/axonhub-magisk/main/update.json
