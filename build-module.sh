@@ -185,14 +185,13 @@ fi
 BIN_SIZE=$(du -h "$AXONHUB_BIN" | cut -f1)
 echo "  编译完成: $AXONHUB_BIN ($BIN_SIZE)"
 
-# 验证 ELF 格式
-MAGIC_HEX=$(xxd -l 20 "$AXONHUB_BIN" | head -1)
-if [[ ! "$MAGIC_HEX" =~ 7f45 4c46 ]]; then
-    echo "ERROR: 二进制不是 ELF 格式" >&2
-    echo "  magic: $MAGIC_HEX" >&2
+# 验证 ELF 格式（检查前 4 字节 magic: 0x7f 'E' 'L' 'F'）
+ELF_MAGIC=$(head -c 4 "$AXONHUB_BIN" | xxd -p)
+if [[ "$ELF_MAGIC" != "7f454c46" ]]; then
+    echo "ERROR: 二进制不是 ELF 格式 (magic: $ELF_MAGIC)" >&2
     exit 1
 fi
-echo "  ELF 格式验证通过"
+echo "  ELF 格式验证通过 (magic: $ELF_MAGIC)"
 
 # ========== 准备模块文件 ==========
 echo ""
